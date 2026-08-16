@@ -1,11 +1,12 @@
 const http = require('http');
-const TelegramBot = require('node-telegram-bot-api');
+// Importación correcta para compatibilidad con ESM y CommonJS
+const TelegramBot = require('node-telegram-bot-api').default || require('node-telegram-bot-api');
 const { spawn } = require('child_process');
 
 // ========== CONFIGURACIÓN ==========
 const token = process.env.TELEGRAM_TOKEN || '8749993343:AAF3deTKoBEPvrXaOd0gvT7pK3d8G8dpp_w';
 const WEBHOOK_URL = process.env.RENDER_URL || 'https://bot-sabelotodo.onrender.com';
-const ADMIN_ID = 5012552916;  // Cambia por tu ID de Telegram
+const ADMIN_ID = 5012552916;  // Reemplaza con tu ID real
 
 const bot = new TelegramBot(token);
 const usuariosAutorizados = new Set([ADMIN_ID]);
