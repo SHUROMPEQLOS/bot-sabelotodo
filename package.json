@@ -1,0 +1,13 @@
+{
+  "name": "bot-sabelotodo",
+  "version": "1.0.0",
+  "description": "Bot de Telegram en Render",
+  "main": "bot_control.js",
+  "scripts": {
+    "start": "node bot_control.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^1.2.0",
+    "ws": "^8.21.3"
+  }
+}
