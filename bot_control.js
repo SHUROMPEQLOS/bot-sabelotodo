@@ -1,90 +1,87 @@
 const http = require('http');
-http.createServer((req, res) => res.end('Bot activo')).listen(process.env.PORT || 3000);
-
-const TelegramBot = require('node-telegram-bot-api').default || require('node-telegram-bot-api');
+const TelegramBot = require('node-telegram-bot-api');
 const { spawn } = require('child_process');
 
-const token = '8883797197:AAH_gd1Dg1WIGAzpG_VDc6cUJRll5W8t84w';
-const bot = new TelegramBot(token, { polling: true });
+// ========== CONFIGURACIÓN ==========
+const token = process.env.TELEGRAM_TOKEN || '8749993343:AAF3deTKoBEPvrXaOd0gvT7pK3d8G8dpp_w';
+const WEBHOOK_URL = process.env.RENDER_URL || 'https://bot-sabelotodo.onrender.com';
+const ADMIN_ID = 5012552916;  // Cambia por tu ID de Telegram
 
-const ADMIN_ID = 5012552916;
+const bot = new TelegramBot(token);
 const usuariosAutorizados = new Set([ADMIN_ID]);
 
 let scriptProcess = null;
 let currentRC = null;
-let restartTimer = null;
-let isRestarting = false;
 let modoResumen = true;  // true = solo resultados, false = todo
-let ultimoResultado = ''; // Evita spam de resultados repetidos
+let chatIdActivo = null;
+let restartTimer = null;
 
-// Limpia códigos ANSI
+// ========== FUNCIONES AUXILIARES ==========
 function cleanAnsi(text) {
   return text.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-n glassware-~]/g, '')
-             .replace(/\[\d+m/g, '')
-             .replace(/\[2J/g, '')
-             .replace(/\[H/g, '');
+             .replace(/\[\d+m/g, '').replace(/\[2J/g, '').replace(/\[H/g, '');
 }
 
 function killAllProcesses() {
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
-  isRestarting = false;
   if (scriptProcess) { try { scriptProcess.kill('SIGTERM'); } catch (e) {} scriptProcess = null; }
   currentRC = null;
-  ultimoResultado = '';
+  chatIdActivo = null;
 }
 
-// Extrae los puntos de una línea con formato "Yo:123 Rival:456"
-function extraerPuntos(line) {
-  const yoMatch = line.match(/Yo:\s*(\d+)/i);
-  const rivalMatch = line.match(/Rival:\s*(\d+)/i);
-  if (yoMatch && rivalMatch) {
-    return { yo: parseInt(yoMatch[1]), rival: parseInt(rivalMatch[1]) };
-  }
-  return null;
-}
-
-// Determina si una línea es la última pregunta
-function esUltimaPregunta(line) {
-  return /última pregunta/i.test(line);
-}
-
-// Función que determina si un mensaje debe mostrarse en modo resumen
 function esResultadoFinal(line) {
   const lower = line.toLowerCase();
   return /victoria|derrota|empate|sin energía|reanudará/.test(lower);
 }
 
-// Middleware de autorización
 function estaAutorizado(msg) {
   const userId = msg.from.id;
   if (usuariosAutorizados.has(userId)) return true;
-
-  bot.sendMessage(
-    msg.chat.id,
-    '👋 ¡Hola! Has solicitado acceso al bot.\n\n' +
-    '⏳ El dueño debe autorizarte. Te avisaré cuando lo haga.\n\n' +
-    'Mientras esperas, no puedes usar el bot.'
-  );
-  bot.sendMessage(
-    ADMIN_ID,
-    `<b>⚠️ Nueva solicitud de acceso</b>\n\n` +
-    `👤 Usuario: ${msg.from.first_name} (@${msg.from.username || 'sin_username'})\n` +
-    `🆔 ID: <code>${userId}</code>\n\n` +
-    `Para autorizarlo escribe:\n<code>/autorizar ${userId}</code>`,
+  bot.sendMessage(msg.chat.id, '⏳ Solicita acceso al dueño.');
+  bot.sendMessage(ADMIN_ID,
+    `<b>⚠️ Nueva solicitud</b>\n👤 ${msg.from.first_name} (@${msg.from.username || 'sin_username'})\n🆔 <code>${userId}</code>\nPara autorizar: /autorizar ${userId}`,
     { parse_mode: 'HTML' }
   );
   return false;
 }
 
-console.log('🤖 Bot de Telegram listo y corriendo...');
+// ========== CONFIGURACIÓN DEL WEBHOOK ==========
+bot.setWebHook(`${WEBHOOK_URL}/webhook`)
+  .then(() => console.log('✅ Webhook configurado correctamente'))
+  .catch(err => console.error('❌ Error al configurar webhook:', err.message));
 
-// --- Comandos de administrador ---
+// ========== SERVIDOR HTTP PARA EL WEBHOOK ==========
+const server = http.createServer((req, res) => {
+  if (req.method === 'POST' && req.url === '/webhook') {
+    let body = '';
+    req.on('data', chunk => body += chunk);
+    req.on('end', () => {
+      try {
+        const update = JSON.parse(body);
+        bot.processUpdate(update);
+        res.writeHead(200);
+        res.end('OK');
+      } catch (e) {
+        res.writeHead(400);
+        res.end('Bad Request');
+      }
+    });
+  } else {
+    res.writeHead(200);
+    res.end('Bot activo');
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`🚀 Bot escuchando en puerto ${PORT}`));
+
+// ========== COMANDOS ==========
 bot.onText(/\/autorizar (\d+)/, (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const id = parseInt(match[1]);
   usuariosAutorizados.add(id);
   bot.sendMessage(msg.chat.id, `✅ Usuario <code>${id}</code> autorizado.`, { parse_mode: 'HTML' });
-  bot.sendMessage(id, '🎉 Acceso aprobado. Envía /start para comenzar.');
+  bot.sendMessage(id, '🎉 Acceso aprobado. Envía /start.');
 });
 
 bot.onText(/\/desautorizar (\d+)/, (msg, match) => {
@@ -94,16 +91,14 @@ bot.onText(/\/desautorizar (\d+)/, (msg, match) => {
   bot.sendMessage(msg.chat.id, `🚫 Usuario <code>${id}</code> revocado.`, { parse_mode: 'HTML' });
 });
 
-// --- Comandos del bot ---
 bot.onText(/\/start/, (msg) => {
   if (!estaAutorizado(msg)) return;
-  bot.sendMessage(
-    msg.chat.id,
+  bot.sendMessage(msg.chat.id,
     '👋 <b>Control de Sabelotodo</b>\n\n' +
     '🔹 <code>/iniciar &lt;RC&gt;</code> - Arranca el bot.\n' +
     '🔹 <code>/detener</code> - Apaga todo.\n' +
     '🔹 <code>/estado</code> - Estado actual.\n' +
-    '🔹 <code>/modo</code> - Alterna entre resumen (solo resultados) y detallado (todo).',
+    '🔹 <code>/modo</code> - Alterna resumen/detallado.',
     { parse_mode: 'HTML' }
   );
 });
@@ -111,18 +106,18 @@ bot.onText(/\/start/, (msg) => {
 bot.onText(/\/modo/, (msg) => {
   if (!estaAutorizado(msg)) return;
   modoResumen = !modoResumen;
-  ultimoResultado = ''; // Reinicia para evitar mensajes repetidos al cambiar de modo
-  bot.sendMessage(msg.chat.id, `📊 Modo: ${modoResumen ? 'RESUMEN (solo resultados finales)' : 'DETALLADO (todo el output)'}`);
+  bot.sendMessage(msg.chat.id, `📊 Modo: ${modoResumen ? 'RESUMEN (solo resultados)' : 'DETALLADO (todo)'}`);
 });
 
-// Función para iniciar el script
+// ========== INICIAR SCRIPT ==========
 function iniciarScript(chatId, recoveryCode) {
-  if (scriptProcess) killAllProcesses();
+  if (scriptProcess) {
+    bot.sendMessage(chatId, '⛔ Ya hay una partida activa. Usa /detener primero.');
+    return;
+  }
 
+  chatIdActivo = chatId;
   currentRC = recoveryCode;
-  isRestarting = false;
-  ultimoResultado = '';
-
   bot.sendMessage(chatId, `🚀 Iniciando con RC: <code>${recoveryCode}</code>...`, { parse_mode: 'HTML' });
 
   const args = [
@@ -138,94 +133,46 @@ function iniciarScript(chatId, recoveryCode) {
     stdio: ['pipe', 'pipe', 'pipe']
   });
 
-  // Manejador de stdout con lógica de puntos
   scriptProcess.stdout.on('data', (data) => {
-    const output = data.toString();
-    const lines = output.split('\n').filter(line => line.trim() !== '');
+    const lines = data.toString().split('\n').filter(l => l.trim());
     for (const line of lines) {
       const cleanLine = cleanAnsi(line).trim();
       if (!cleanLine) continue;
-
-      if (modoResumen) {
-        // Primero, si es un mensaje de resultado conocido (victoria/derrota/empate en texto), lo enviamos
-        if (esResultadoFinal(cleanLine)) {
-          if (cleanLine !== ultimoResultado) {
-            ultimoResultado = cleanLine;
-            bot.sendMessage(chatId, cleanLine);
-          }
-          continue;
-        }
-
-        // Si es "última pregunta", extraemos los puntos y determinamos el resultado
-        if (esUltimaPregunta(cleanLine)) {
-          const puntos = extraerPuntos(cleanLine);
-          if (puntos) {
-            let resultado = '';
-            if (puntos.yo > puntos.rival) {
-              resultado = `🏆 ¡VICTORIA! Yo: ${puntos.yo} - Rival: ${puntos.rival}`;
-            } else if (puntos.yo < puntos.rival) {
-              resultado = `😞 DERROTA. Yo: ${puntos.yo} - Rival: ${puntos.rival}`;
-            } else {
-              resultado = `🤝 EMPATE. Yo: ${puntos.yo} - Rival: ${puntos.rival}`;
-            }
-            if (resultado !== ultimoResultado) {
-              ultimoResultado = resultado;
-              bot.sendMessage(chatId, resultado);
-            }
-          }
-          continue;
-        }
-
-        // Si es "Partida terminada" o "Buscando otra..." podemos ignorarlo
-        // pero si quieres verlo, descomenta:
-        // if (/partida terminada|buscando otra/i.test(cleanLine)) {
-        //   bot.sendMessage(chatId, cleanLine);
-        // }
-
-        // Ignoramos cualquier otra línea en modo resumen
-      } else {
-        // Modo detallado: enviamos todo
-        bot.sendMessage(chatId, cleanLine);
-      }
+      if (modoResumen && !esResultadoFinal(cleanLine)) continue;
+      bot.sendMessage(chatId, cleanLine);
     }
   });
 
-  // stderr siempre se muestra (errores)
   scriptProcess.stderr.on('data', (data) => {
     const error = cleanAnsi(data.toString()).trim();
     if (error) bot.sendMessage(chatId, `⚠️ ${error}`);
   });
 
-  // Reinicio automático si se cae
   scriptProcess.on('close', (code) => {
     scriptProcess = null;
-    if (isRestarting || !currentRC) return;
-
-    bot.sendMessage(chatId, `🔄 Script detenido (${code}). Reiniciando en 10s...`);
-    if (restartTimer) clearTimeout(restartTimer);
-    restartTimer = setTimeout(() => {
-      restartTimer = null;
-      if (!currentRC) return;
-      bot.sendMessage(chatId, `♻️ Reiniciando...`);
-      isRestarting = true;
-      iniciarScript(chatId, currentRC);
-    }, 10000);
+    bot.sendMessage(chatId, `🛑 Script finalizado (código ${code}).`);
+    if (currentRC && chatIdActivo) {
+      // Reinicio automático tras 10 segundos
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        restartTimer = null;
+        bot.sendMessage(chatIdActivo, `♻️ Reiniciando automáticamente...`);
+        iniciarScript(chatIdActivo, currentRC);
+      }, 10000);
+    }
   });
 }
 
 bot.onText(/\/iniciar (.+)/, (msg, match) => {
   if (!estaAutorizado(msg)) return;
-  const chatId = msg.chat.id;
   const rc = match[1].trim();
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
-  isRestarting = false;
-  iniciarScript(chatId, rc);
+  iniciarScript(msg.chat.id, rc);
 });
 
 bot.onText(/\/detener/, (msg) => {
   if (!estaAutorizado(msg)) return;
   if (restartTimer) { clearTimeout(restartTimer); restartTimer = null; }
-  isRestarting = false;
   killAllProcesses();
   bot.sendMessage(msg.chat.id, '🛑 Bot detenido.');
 });
@@ -236,7 +183,7 @@ bot.onText(/\/estado/, (msg) => {
   bot.sendMessage(msg.chat.id, `${estado} | Modo: ${modoResumen ? 'RESUMEN' : 'DETALLADO'}`);
 });
 
-// Mensajes libres
+// Mensajes libres (para comandos internos como 'balance', 'stats', etc.)
 bot.on('message', (msg) => {
   if (msg.text && !msg.text.startsWith('/')) {
     if (!usuariosAutorizados.has(msg.from.id)) return;
